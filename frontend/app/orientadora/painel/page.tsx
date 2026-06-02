@@ -4,7 +4,7 @@ import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 import { io } from "socket.io-client";
 import { AlertTriangle, CheckCircle2, Clock3, MessageCircle } from "lucide-react";
-import { api, API_URL, Conversation } from "@/lib/api";
+import { api, API_URL, Conversation, STATIC_DEMO } from "@/lib/api";
 import { Logo } from "@/components/Logo";
 
 const filters = [
@@ -36,6 +36,7 @@ export default function CounselorDashboardPage() {
 
   useEffect(() => {
     load();
+    if (STATIC_DEMO) return;
     const socket = io(API_URL.replace("/api", ""));
     socket.emit("join:counselor");
     socket.on("conversation:update", () => load());

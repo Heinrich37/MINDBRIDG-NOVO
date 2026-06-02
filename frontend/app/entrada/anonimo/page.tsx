@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
-import { api } from "@/lib/api";
+import { api, STATIC_DEMO } from "@/lib/api";
 import { Checkin } from "@/components/Checkin";
 import { Logo } from "@/components/Logo";
 import { SafetyNotice } from "@/components/SafetyNotice";
@@ -23,7 +23,7 @@ export default function AnonymousEntryPage() {
         body: JSON.stringify({ checkin })
       });
       setAnonymousCode(data.user.anonymous_code);
-      setTimeout(() => router.push(`/chat/${data.conversation.id}`), 900);
+      setTimeout(() => router.push(STATIC_DEMO ? "/chat/demo" : `/chat/${data.conversation.id}`), 900);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Não foi possível entrar anonimamente");
       setLoading(false);

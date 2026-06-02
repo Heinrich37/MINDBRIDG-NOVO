@@ -2,7 +2,7 @@
 
 import { FormEvent, useState } from "react";
 import { useRouter } from "next/navigation";
-import { api } from "@/lib/api";
+import { api, STATIC_DEMO } from "@/lib/api";
 import { Checkin } from "@/components/Checkin";
 import { Logo } from "@/components/Logo";
 import { SafetyNotice } from "@/components/SafetyNotice";
@@ -30,7 +30,7 @@ export default function IdentifiedEntryPage() {
           checkin
         })
       });
-      router.push(`/chat/${data.conversation.id}`);
+      router.push(STATIC_DEMO ? "/chat/demo" : `/chat/${data.conversation.id}`);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Não foi possível entrar");
     } finally {
