@@ -18,10 +18,12 @@ export default function AnonymousEntryPage() {
     setLoading(true);
     setError("");
     try {
-      const data = await api<{ user: { anonymous_code: string }; conversation: { id: string } }>("/entry/anonymous", {
+      const data = await api<{ user: { anonymous_code: string }; conversation: { id: string }; conversation_token: string }>("/entry/anonymous", {
         method: "POST",
         body: JSON.stringify({ checkin })
       });
+      localStorage.setItem("mindbridge_conversation_id", data.conversation.id);
+      localStorage.setItem(`mindbridge_conversation_token:${data.conversation.id}`, data.conversation_token);
       setAnonymousCode(data.user.anonymous_code);
       setTimeout(() => router.push(STATIC_DEMO ? "/chat/demo" : `/chat/${data.conversation.id}`), 900);
     } catch (err) {

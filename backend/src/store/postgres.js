@@ -3,6 +3,7 @@ import path from "path";
 import { fileURLToPath } from "url";
 import bcrypt from "bcryptjs";
 import pg from "pg";
+import { isProduction } from "../security.js";
 
 const { Pool } = pg;
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -22,12 +23,14 @@ export async function createPostgresStore() {
       [adminName, adminEmail, await bcrypt.hash(adminPassword, 10)]
     );
   }
-  const testAccess = await pool.query("SELECT id FROM counselors WHERE email = $1", ["admin@senac.br"]);
-  if (testAccess.rowCount === 0) {
-    await pool.query(
-      "INSERT INTO counselors (name, email, password_hash) VALUES ($1, $2, $3)",
-      ["Acesso de Teste", "admin@senac.br", await bcrypt.hash("123456", 10)]
-    );
+  if (!isProduction && process.env.ENABLE_TEST_COUNSELOR !== "false") {
+    const testAccess = await pool.query("SELECT id FROM counselors WHERE email = $1", ["admin@senac.br"]);
+    if (testAccess.rowCount === 0) {
+      await pool.query(
+        "INSERT INTO counselors (name, email, password_hash) VALUES ($1, $2, $3)",
+        ["Acesso de Teste", "admin@senac.br", await bcrypt.hash("123456", 10)]
+      );
+    }
   }
 
   async function getConversation(id) {
@@ -63,10 +66,14 @@ export async function createPostgresStore() {
     },
     async createConversation(input) {
       const { rows } = await pool.query(
-        "INSERT INTO conversations (user_id, risk_level, status, needs_follow_up) VALUES ($1, $2, $3, $4) RETURNING *",
-        [input.user_id, input.risk_level, input.status, input.needs_follow_up]
+        "INSERT INTO conversations (user_id, access_token_hash, risk_level, status, needs_follow_up) VALUES ($1, $2, $3, $4, $5) RETURNING *",
+        [input.user_id, input.access_token_hash, input.risk_level, input.status, input.needs_follow_up]
       );
       return rows[0];
+    },
+    async getConversationAccessTokenHash(id) {
+      const { rows } = await pool.query("SELECT access_token_hash FROM conversations WHERE id = $1", [id]);
+      return rows[0]?.access_token_hash || null;
     },
     getConversation,
     async addMessage(input) {

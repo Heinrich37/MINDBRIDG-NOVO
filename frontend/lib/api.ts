@@ -10,6 +10,14 @@ export async function api<T>(path: string, options: RequestInit = {}): Promise<T
   headers.set("Content-Type", "application/json");
   const token = typeof window !== "undefined" ? localStorage.getItem("mindbridge_token") : null;
   if (token) headers.set("Authorization", `Bearer ${token}`);
+  if (typeof window !== "undefined") {
+    const conversationId = path.match(/^\/conversations\/([^/]+)/)?.[1] || localStorage.getItem("mindbridge_conversation_id");
+    const conversationToken = conversationId ? localStorage.getItem(`mindbridge_conversation_token:${conversationId}`) : null;
+    if (conversationId && conversationToken) {
+      headers.set("X-Conversation-Id", conversationId);
+      headers.set("X-Conversation-Token", conversationToken);
+    }
+  }
 
   const response = await fetch(`${API_URL}${path}`, { ...options, headers, cache: "no-store" });
   const data = await response.json().catch(() => ({}));

@@ -13,13 +13,13 @@
     "@next/eslint-plugin-next": "^15.1.4",
     "framer-motion": "^11.15.0",
     "lucide-react": "^0.468.0",
-    "next": "^15.1.4",
+    "next": "^16.2.9",
     "qrcode.react": "^4.2.0",
     "react": "^19.0.0",
-    "react-dom": "^19.0.0",
-    "socket.io-client": "^4.8.1"
+    "react-dom": "^19.0.0"
   },
   "devDependencies": {
+    "@types/node": "25.9.3",
     "@types/react": "19.2.15",
     "autoprefixer": "^10.4.20",
     "eslint": "^9.17.0",

@@ -1,26 +1,55 @@
 import express from "express";
 import bcrypt from "bcryptjs";
-import jwt from "jsonwebtoken";
+import rateLimit from "express-rate-limit";
 import { z } from "zod";
 import { analyzeMessage, buildAssistantReply } from "./services/assistant.js";
-
-const jwtSecret = process.env.JWT_SECRET || "mindbridge-dev-secret";
+import {
+  hashToken,
+  publicConversation,
+  publicUser,
+  randomToken,
+  sanitizeText,
+  signCounselorToken,
+  timingSafeEqualText,
+  verifyCounselorToken
+} from "./security.js";
 
 const userSchema = z.object({
-  name: z.string().min(2),
-  phone: z.string().min(8),
-  email: z.string().email(),
-  course: z.string().optional().nullable(),
+  name: z.string().trim().min(2).max(120),
+  phone: z.string().trim().min(8).max(30),
+  email: z.string().trim().email().max(180),
+  course: z.string().trim().max(120).optional().nullable(),
   consent: z.literal(true),
-  checkin: z.string().min(2)
+  checkin: z.enum(["Muito bem", "Bem", "Neutro", "Mal", "Muito mal"])
 });
 
 const messageSchema = z.object({
-  message: z.string().min(1).max(2000)
+  message: z.string().trim().min(1).max(1500)
 });
 
 const noteSchema = z.object({
-  note: z.string().min(1).max(4000)
+  note: z.string().trim().min(1).max(2000)
+});
+
+const anonymousEntrySchema = z.object({
+  checkin: z.enum(["Muito bem", "Bem", "Neutro", "Mal", "Muito mal"]).default("Neutro")
+});
+
+const idSchema = z.object({
+  id: z.string().uuid()
+});
+
+const quickActionSchema = z.object({
+  action: z.enum(["counselor", "contacts", "close", "ai"])
+});
+
+const statusSchema = z.object({
+  status: z.enum(["open", "waiting_counselor", "in_follow_up", "closed", "emergency"])
+});
+
+const emotionalCheckinSchema = z.object({
+  user_id: z.string().uuid(),
+  mood: z.enum(["😀", "😐", "😢", "😡", "😰", "😴", "Muito bem", "Bem", "Neutro", "Mal", "Muito mal"])
 });
 
 function authCounselor(req, _res, next) {
@@ -32,7 +61,7 @@ function authCounselor(req, _res, next) {
     throw err;
   }
   try {
-    req.counselor = jwt.verify(token, jwtSecret);
+    req.counselor = verifyCounselorToken(token);
     next();
   } catch {
     const err = new Error("Sessão inválida");
@@ -41,19 +70,97 @@ function authCounselor(req, _res, next) {
   }
 }
 
-export function createApiRouter({ store, io }) {
+function optionalCounselor(req) {
+  const header = req.headers.authorization || "";
+  const token = header.startsWith("Bearer ") ? header.slice(7) : null;
+  if (!token) return null;
+  try {
+    return verifyCounselorToken(token);
+  } catch {
+    return null;
+  }
+}
+
+async function authConversation(req, _res, next) {
+  try {
+    const counselor = optionalCounselor(req);
+    if (counselor) {
+      req.counselor = counselor;
+      next();
+      return;
+    }
+    const { id } = idSchema.parse(req.params);
+    const token = req.headers["x-conversation-token"];
+    if (typeof token !== "string" || token.length < 32) {
+      const err = new Error("Acesso à conversa não autorizado");
+      err.status = 401;
+      throw err;
+    }
+    const expectedHash = await req.store.getConversationAccessTokenHash(id);
+    if (!timingSafeEqualText(hashToken(token), expectedHash)) {
+      const err = new Error("Acesso à conversa não autorizado");
+      err.status = 401;
+      throw err;
+    }
+    next();
+  } catch (err) {
+    next(err);
+  }
+}
+
+async function authConversationFromHeaders(req, _res, next) {
+  try {
+    const conversationId = req.headers["x-conversation-id"];
+    const conversationToken = req.headers["x-conversation-token"];
+    if (typeof conversationId !== "string" || typeof conversationToken !== "string") {
+      const err = new Error("Acesso à conversa não autorizado");
+      err.status = 401;
+      throw err;
+    }
+    idSchema.parse({ id: conversationId });
+    const expectedHash = await req.store.getConversationAccessTokenHash(conversationId);
+    if (!timingSafeEqualText(hashToken(conversationToken), expectedHash)) {
+      const err = new Error("Acesso à conversa não autorizado");
+      err.status = 401;
+      throw err;
+    }
+    req.conversationId = conversationId;
+    next();
+  } catch (err) {
+    next(err);
+  }
+}
+
+const loginLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  limit: 8,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: "Muitas tentativas de login. Tente novamente em alguns minutos." }
+});
+
+export function createApiRouter({ store }) {
   const router = express.Router();
+  router.use((req, _res, next) => {
+    req.store = store;
+    next();
+  });
 
   router.post("/entry/identified", async (req, res) => {
     const input = userSchema.parse(req.body);
+    const conversationToken = randomToken();
     const user = await store.createUser({
-      ...input,
+      name: sanitizeText(input.name, 120),
+      phone: sanitizeText(input.phone, 30),
+      email: sanitizeText(input.email, 180).toLowerCase(),
+      course: sanitizeText(input.course, 120) || null,
       is_anonymous: false,
       anonymous_code: null
     });
     const risk = input.checkin === "Muito mal" ? "yellow" : "green";
     const conversation = await store.createConversation({
       user_id: user.id,
+      access_token_hash: hashToken(conversationToken),
       risk_level: risk,
       status: "open",
       needs_follow_up: risk !== "green"
@@ -64,15 +171,17 @@ export function createApiRouter({ store, io }) {
       sender_type: "assistant",
       message: "Olá. Obrigado por chegar até aqui. Este é um espaço de acolhimento inicial, sem diagnósticos. Como posso te escutar hoje?"
     });
-    res.status(201).json({ user, conversation });
+    res.status(201).json({ user: publicUser(user), conversation: publicConversation(conversation), conversation_token: conversationToken });
   });
 
   router.post("/entry/anonymous", async (req, res) => {
-    const checkin = String(req.body?.checkin || "Neutro");
+    const { checkin } = anonymousEntrySchema.parse(req.body);
+    const conversationToken = randomToken();
     const user = await store.createAnonymousUser();
     const risk = checkin === "Muito mal" ? "yellow" : "green";
     const conversation = await store.createConversation({
       user_id: user.id,
+      access_token_hash: hashToken(conversationToken),
       risk_level: risk,
       status: "open",
       needs_follow_up: risk !== "green"
@@ -83,42 +192,39 @@ export function createApiRouter({ store, io }) {
       sender_type: "assistant",
       message: `Olá. Você entrou como ${user.anonymous_code}. Pode conversar sem informar sua identidade. Se houver risco, a orientadora poderá receber um alerta interno para acompanhamento.`
     });
-    res.status(201).json({ user, conversation });
+    res.status(201).json({ user: publicUser(user), conversation: publicConversation(conversation), conversation_token: conversationToken });
   });
 
-  router.get("/conversations/:id", async (req, res) => {
-    const conversation = await store.getConversation(req.params.id);
-    res.json(conversation);
+  router.get("/conversations/:id", authConversation, async (req, res) => {
+    const { id } = idSchema.parse(req.params);
+    const conversation = await store.getConversation(id);
+    res.json(publicConversation(conversation));
   });
 
-  router.post("/conversations/:id/messages", async (req, res) => {
+  router.post("/conversations/:id/messages", authConversation, async (req, res) => {
+    const { id } = idSchema.parse(req.params);
     const { message } = messageSchema.parse(req.body);
     const userMessage = await store.addMessage({
-      conversation_id: req.params.id,
+      conversation_id: id,
       sender_type: "student",
-      message
+      message: sanitizeText(message, 1500)
     });
-    const analysis = analyzeMessage(message);
-    await store.updateConversationRisk(req.params.id, analysis.riskLevel, analysis.tags, analysis.needsFollowUp);
+    const analysis = analyzeMessage(userMessage.message);
+    await store.updateConversationRisk(id, analysis.riskLevel, analysis.tags, analysis.needsFollowUp);
 
     const assistantMessage = await store.addMessage({
-      conversation_id: req.params.id,
+      conversation_id: id,
       sender_type: "assistant",
-      message: buildAssistantReply(message, analysis)
+      message: buildAssistantReply(userMessage.message, analysis)
     });
 
-    const conversation = await store.getConversation(req.params.id);
-    io.to(`conversation:${req.params.id}`).emit("message:new", userMessage);
-    io.to(`conversation:${req.params.id}`).emit("message:new", assistantMessage);
-    io.to("counselor").emit("conversation:update", conversation);
-    if (analysis.riskLevel === "red") {
-      io.to("counselor").emit("alert:red", conversation);
-    }
+    const conversation = publicConversation(await store.getConversation(id));
     res.status(201).json({ userMessage, assistantMessage, conversation });
   });
 
-  router.post("/conversations/:id/quick-action", async (req, res) => {
-    const action = String(req.body?.action || "");
+  router.post("/conversations/:id/quick-action", authConversation, async (req, res) => {
+    const { id } = idSchema.parse(req.params);
+    const { action } = quickActionSchema.parse(req.body);
     const replies = {
       counselor: "Entendi. Vou sinalizar que você quer falar com a orientadora do Senac. Buscar ajuda é um ato de coragem.",
       contacts: "Contatos de ajuda: CVV 188, SAMU 192 e Bombeiros 193. Se houver risco agora, procure ajuda imediata.",
@@ -126,30 +232,33 @@ export function createApiRouter({ store, io }) {
       ai: "Tudo bem. Podemos continuar por aqui, com calma. O que você gostaria de me contar agora?"
     };
     if (action === "counselor") {
-      await store.setConversationStatus(req.params.id, "waiting_counselor", true);
+      await store.setConversationStatus(id, "waiting_counselor", true);
     }
     if (action === "close") {
-      await store.setConversationStatus(req.params.id, "closed", false);
+      await store.setConversationStatus(id, "closed", false);
     }
     const message = await store.addMessage({
-      conversation_id: req.params.id,
+      conversation_id: id,
       sender_type: "assistant",
       message: replies[action] || replies.ai
     });
-    const conversation = await store.getConversation(req.params.id);
-    io.to(`conversation:${req.params.id}`).emit("message:new", message);
-    io.to("counselor").emit("conversation:update", conversation);
+    const conversation = publicConversation(await store.getConversation(id));
     res.json({ message, conversation });
   });
 
-  router.post("/emotional-checkins", async (req, res) => {
-    const user_id = String(req.body?.user_id || "");
-    const mood = String(req.body?.mood || "");
+  router.post("/emotional-checkins", authConversationFromHeaders, async (req, res) => {
+    const { user_id, mood } = emotionalCheckinSchema.parse(req.body);
+    const conversation = await store.getConversation(req.conversationId);
+    if (conversation.user_id !== user_id) {
+      const err = new Error("Acesso não autorizado ao check-in");
+      err.status = 403;
+      throw err;
+    }
     const checkin = await store.createEmotionalCheckin({ user_id, mood });
     res.status(201).json(checkin);
   });
 
-  router.post("/counselor/login", async (req, res) => {
+  router.post("/counselor/login", loginLimiter, async (req, res) => {
     const email = String(req.body?.email || "").trim();
     const password = String(req.body?.password || "").trim();
     const counselor = await store.findCounselorByEmail(email);
@@ -158,7 +267,7 @@ export function createApiRouter({ store, io }) {
       err.status = 401;
       throw err;
     }
-    const token = jwt.sign({ id: counselor.id, email: counselor.email, name: counselor.name }, jwtSecret, { expiresIn: "8h" });
+    const token = signCounselorToken({ id: counselor.id, email: counselor.email, name: counselor.name });
     res.json({ token, counselor: { id: counselor.id, name: counselor.name, email: counselor.email } });
   });
 
@@ -167,32 +276,34 @@ export function createApiRouter({ store, io }) {
   });
 
   router.get("/counselor/conversations", authCounselor, async (req, res) => {
-    res.json(await store.listConversations(req.query.filter || "all"));
+    const conversations = await store.listConversations(req.query.filter || "all");
+    res.json(conversations.map(publicConversation));
   });
 
   router.post("/counselor/conversations/:id/reply", authCounselor, async (req, res) => {
+    const { id } = idSchema.parse(req.params);
     const { message } = messageSchema.parse(req.body);
     const reply = await store.addMessage({
-      conversation_id: req.params.id,
+      conversation_id: id,
       sender_type: "counselor",
-      message
+      message: sanitizeText(message, 1500)
     });
-    await store.setConversationStatus(req.params.id, "in_follow_up", true);
-    const conversation = await store.getConversation(req.params.id);
-    io.to(`conversation:${req.params.id}`).emit("message:new", reply);
-    io.to("counselor").emit("conversation:update", conversation);
+    await store.setConversationStatus(id, "in_follow_up", true);
+    const conversation = publicConversation(await store.getConversation(id));
     res.status(201).json({ reply, conversation });
   });
 
   router.post("/counselor/conversations/:id/status", authCounselor, async (req, res) => {
-    const status = String(req.body?.status || "open");
-    const conversation = await store.setConversationStatus(req.params.id, status, status !== "closed");
-    res.json(conversation);
+    const { id } = idSchema.parse(req.params);
+    const { status } = statusSchema.parse(req.body);
+    const conversation = await store.setConversationStatus(id, status, status !== "closed");
+    res.json(publicConversation(conversation));
   });
 
   router.post("/counselor/conversations/:id/notes", authCounselor, async (req, res) => {
+    const { id } = idSchema.parse(req.params);
     const { note } = noteSchema.parse(req.body);
-    const saved = await store.addCounselorNote({ conversation_id: req.params.id, note });
+    const saved = await store.addCounselorNote({ conversation_id: id, note: sanitizeText(note, 2000) });
     res.status(201).json(saved);
   });
 

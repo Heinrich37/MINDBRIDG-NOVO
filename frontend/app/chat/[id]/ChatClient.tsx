@@ -2,12 +2,10 @@
 
 import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import { useParams } from "next/navigation";
-import { io } from "socket.io-client";
 import { Bot, HeartHandshake, LifeBuoy, Send, SmilePlus, UserRound } from "lucide-react";
-import { api, API_URL, Conversation, Message, STATIC_DEMO } from "@/lib/api";
+import { api, Conversation, Message } from "@/lib/api";
 import { BreathingModal } from "@/components/BreathingModal";
 
-const socketUrl = API_URL.replace("/api", "");
 const moods = ["😀", "😐", "😢", "😡", "😰", "😴"];
 
 export default function ChatPage() {
@@ -25,14 +23,6 @@ export default function ChatPage() {
       setConversation(data);
       setMessages(data.messages);
     });
-    if (STATIC_DEMO) return;
-    const socket = io(socketUrl);
-    socket.emit("join:conversation", params.id);
-    socket.on("message:new", (message: Message) => {
-      setMessages((current) => current.some((item) => item.id === message.id) ? current : [...current, message]);
-      setTyping(false);
-    });
-    return () => { socket.disconnect(); };
   }, [params.id]);
 
   useEffect(() => {

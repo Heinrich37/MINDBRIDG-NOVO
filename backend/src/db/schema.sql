@@ -14,6 +14,7 @@ CREATE TABLE IF NOT EXISTS users (
 CREATE TABLE IF NOT EXISTS conversations (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
   user_id UUID REFERENCES users(id) ON DELETE CASCADE,
+  access_token_hash TEXT,
   risk_level TEXT NOT NULL DEFAULT 'green',
   status TEXT NOT NULL DEFAULT 'open',
   needs_follow_up BOOLEAN NOT NULL DEFAULT false,
@@ -21,6 +22,10 @@ CREATE TABLE IF NOT EXISTS conversations (
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+
+ALTER TABLE conversations ADD COLUMN IF NOT EXISTS access_token_hash TEXT;
+
+CREATE INDEX IF NOT EXISTS idx_conversations_user_id ON conversations(user_id);
 
 CREATE TABLE IF NOT EXISTS messages (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
@@ -50,3 +55,7 @@ CREATE TABLE IF NOT EXISTS emotional_checkins (
   mood TEXT NOT NULL,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+
+CREATE INDEX IF NOT EXISTS idx_messages_conversation_id ON messages(conversation_id);
+CREATE INDEX IF NOT EXISTS idx_counselor_notes_conversation_id ON counselor_notes(conversation_id);
+CREATE INDEX IF NOT EXISTS idx_emotional_checkins_user_id ON emotional_checkins(user_id);

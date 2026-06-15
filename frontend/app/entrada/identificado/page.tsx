@@ -19,7 +19,7 @@ export default function IdentifiedEntryPage() {
     setError("");
     const form = new FormData(event.currentTarget);
     try {
-      const data = await api<{ conversation: { id: string } }>("/entry/identified", {
+      const data = await api<{ conversation: { id: string }; conversation_token: string }>("/entry/identified", {
         method: "POST",
         body: JSON.stringify({
           name: form.get("name"),
@@ -30,6 +30,8 @@ export default function IdentifiedEntryPage() {
           checkin
         })
       });
+      localStorage.setItem("mindbridge_conversation_id", data.conversation.id);
+      localStorage.setItem(`mindbridge_conversation_token:${data.conversation.id}`, data.conversation_token);
       router.push(STATIC_DEMO ? "/chat/demo" : `/chat/${data.conversation.id}`);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Não foi possível entrar");

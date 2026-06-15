@@ -1,5 +1,6 @@
 import bcrypt from "bcryptjs";
 import { v4 as uuid } from "uuid";
+import { isProduction } from "../security.js";
 
 const now = () => new Date().toISOString();
 
@@ -17,12 +18,14 @@ export async function createMemoryStore() {
     email: process.env.ADMIN_EMAIL || "orientadora@senac.br",
     password_hash: await bcrypt.hash(process.env.ADMIN_PASSWORD || "MindBridge@2026", 10)
   });
-  counselors.push({
-    id: uuid(),
-    name: "Acesso de Teste",
-    email: "admin@senac.br",
-    password_hash: await bcrypt.hash("123456", 10)
-  });
+  if (!isProduction && process.env.ENABLE_TEST_COUNSELOR !== "false") {
+    counselors.push({
+      id: uuid(),
+      name: "Acesso de Teste",
+      email: "admin@senac.br",
+      password_hash: await bcrypt.hash("123456", 10)
+    });
+  }
 
   function enrich(conversation) {
     const user = users.find((item) => item.id === conversation.user_id);
@@ -52,6 +55,9 @@ export async function createMemoryStore() {
       const conversation = { id: uuid(), tags: [], created_at: now(), updated_at: now(), ...input };
       conversations.push(conversation);
       return conversation;
+    },
+    async getConversationAccessTokenHash(id) {
+      return conversations.find((item) => item.id === id)?.access_token_hash || null;
     },
     async getConversation(id) {
       const conversation = conversations.find((item) => item.id === id);
